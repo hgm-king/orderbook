@@ -27,7 +27,7 @@ impl HalfBook {
             orders: (0..ladder_size).map(|_| Default::default()).collect(),
             arena: (0..ladder_size).map(|_| Default::default()).collect(),
             free_list: (0..ladder_size).collect(),
-            ids: HashMap::with_capacity(ladder_size),
+            ids: HashMap::with_capacity(1000),
         }
     }
 
