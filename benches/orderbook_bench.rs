@@ -1,164 +1,174 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BatchSize};
-use orderbook::{orderbook::Orderbook, orders::{OrderTicket, OrderType, Side}};
+use orderbook::{book::Orderbook, OrderTicket, OrderType, Side};
 
-const SCALE: i64 = 100;
+fn seed_book(ob: &mut Orderbook, levels: i64, size: i64) {
+    for i in 0..levels {
+        ob.accept_order(OrderTicket {
+            side: Side::Buy,
+            size,
+            order_type: OrderType::Limit(10_000 - i),
+        })
+        .unwrap();
 
-fn limit(side: Side, price: i64, size: i64) -> OrderTicket {
-    OrderTicket {
-        order_type: OrderType::Limit(price),
-        size,
-        side,
+        ob.accept_order(OrderTicket {
+            side: Side::Sell,
+            size,
+            order_type: OrderType::Limit(10_001 + i),
+        })
+        .unwrap();
     }
 }
 
-fn market(side: Side, size: i64) -> OrderTicket {
-    OrderTicket {
-        order_type: OrderType::Market,
-        size,
-        side,
-    }
-}
-
-//
-// 1️⃣ Raw Limit Insert Throughput
-//
-fn bench_limit_inserts(c: &mut Criterion) {
-    c.bench_function("limit_insert_1m", |b| {
-        b.iter_batched(
-            || Orderbook::new(),
-            |mut book| {
-                for i in 0..100000 {
-                    let price = 10_000 * SCALE + (i % 100) as i64;
-                    let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
-                    let _ = book.accept_order(black_box(limit(side, price, 10)));
-                }
-            },
-            BatchSize::LargeInput,
-        )
-    });
-}
-
-//
-// 2️⃣ Pure Market Sweeps (worst-case matching)
-//
-fn bench_full_sweep(c: &mut Criterion) {
-    c.bench_function("market_full_sweep", |b| {
+fn bench_market_sweeps(c: &mut Criterion) {
+    c.bench_function("market_full_book_sweep_100_levels", |b| {
         b.iter_batched(
             || {
-                let mut book = Orderbook::new();
-                for _ in 0..100_000 {
-                    book.accept_order(limit(Side::Sell, 10_000 * SCALE, 10)).unwrap();
-                }
-                book
+                let mut ob = Orderbook::new();
+                seed_book(&mut ob, 100, 100);
+                ob
             },
-            |mut book| {
-                let _ = book.accept_order(black_box(market(Side::Buy, 1_000_000)));
+            |mut ob| {
+                black_box(
+                    ob.accept_order(OrderTicket {
+                        side: Side::Buy,
+                        size: 10_000, // sweep whole ask side
+                        order_type: OrderType::Market,
+                    })
+                    .unwrap(),
+                );
             },
-            BatchSize::LargeInput,
+            BatchSize::SmallInput,
         )
     });
 }
 
-//
-// 3️⃣ Alternating Maker/Taker (realistic trading)
-//
-fn bench_realistic_flow(c: &mut Criterion) {
-    c.bench_function("realistic_flow_500k", |b| {
+fn bench_heavy_limit_insert(c: &mut Criterion) {
+    c.bench_function("limit_insert_10k_orders", |b| {
         b.iter(|| {
-            let mut book = Orderbook::new();
-
-            for i in 0..500_000 {
-                let price = 10_000 * SCALE + (i % 50) as i64;
-
-                let _ = book.accept_order(limit(Side::Sell, price, 5));
-                let _ = book.accept_order(limit(Side::Buy, price - 10, 5));
-
-                if i % 3 == 0 {
-                    let _ = book.accept_order(market(Side::Buy, 5));
-                }
-
-                if i % 5 == 0 {
-                    let _ = book.accept_order(market(Side::Sell, 3));
-                }
+            let mut ob = Orderbook::new();
+            for i in 0..10_000 {
+                black_box(
+                    ob.accept_order(OrderTicket {
+                        side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
+                        size: 1,
+                        order_type: OrderType::Limit(10_000 + (i % 50) as i64),
+                    })
+                    .unwrap(),
+                );
             }
-
-            black_box(book);
         })
     });
 }
 
-//
-// 4️⃣ Pathological Same-Price FIFO Stress
-//
-fn bench_fifo_pressure(c: &mut Criterion) {
-    c.bench_function("fifo_pressure", |b| {
-        b.iter(|| {
-            let mut book = Orderbook::new();
+fn bench_mixed_hft_flow(c: &mut Criterion) {
+    c.bench_function("mixed_hft_50k_events", |b| {
+        b.iter_batched(
+            || {
+                let mut ob = Orderbook::new();
+                seed_book(&mut ob, 50, 50);
+                ob
+            },
+            |mut ob| {
+                for i in 0..50_000 {
+                    let ticket = if i % 5 == 0 {
+                        OrderTicket {
+                            side: Side::Buy,
+                            size: 5,
+                            order_type: OrderType::Market,
+                        }
+                    } else if i % 5 == 1 {
+                        OrderTicket {
+                            side: Side::Sell,
+                            size: 3,
+                            order_type: OrderType::Market,
+                        }
+                    } else {
+                        OrderTicket {
+                            side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
+                            size: 1,
+                            order_type: OrderType::Limit(10_000 + (i % 20) as i64),
+                        }
+                    };
 
-            for _ in 0..200_000 {
-                let _ = book.accept_order(limit(Side::Sell, 10_000 * SCALE, 1));
-            }
-
-            let _ = book.accept_order(market(Side::Buy, 200_000));
-
-            black_box(book);
-        })
-    });
-}
-
-//
-// 5️⃣ Deep Ladder Spread (many price levels)
-//
-fn bench_deep_ladder(c: &mut Criterion) {
-    c.bench_function("deep_ladder_100k_levels", |b| {
-        b.iter(|| {
-            let mut book = Orderbook::new();
-
-            for i in 0..100_000 {
-                let price = 10_000 * SCALE + i as i64;
-                let _ = book.accept_order(limit(Side::Sell, price, 1));
-            }
-
-            let _ = book.accept_order(market(Side::Buy, 100_000));
-
-            black_box(book);
-        })
-    });
-}
-
-//
-// 6️⃣ Million Mixed Operations (the brutality test)
-//
-fn bench_million_mixed(c: &mut Criterion) {
-    c.bench_function("million_mixed_ops", |b| {
-        b.iter(|| {
-            let mut book = Orderbook::new();
-
-            for i in 0..1_000_000 {
-                let price = 10_000 * SCALE + (i % 100) as i64;
-                let size = ((i % 10) + 1) as i64;
-
-                match i % 4 {
-                    0 => { let _ = book.accept_order(limit(Side::Buy, price, size)); }
-                    1 => { let _ = book.accept_order(limit(Side::Sell, price + 10, size)); }
-                    2 => { let _ = book.accept_order(market(Side::Buy, size)); }
-                    _ => { let _ = book.accept_order(market(Side::Sell, size)); }
+                    black_box(ob.accept_order(ticket).unwrap());
                 }
-            }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
 
-            black_box(book);
-        })
+fn bench_fifo_queue_depth(c: &mut Criterion) {
+    c.bench_function("deep_same_price_fifo_20k", |b| {
+        b.iter_batched(
+            || {
+                let mut ob = Orderbook::new();
+
+                // 20k orders at exact same price
+                for _ in 0..20_000 {
+                    ob.accept_order(OrderTicket {
+                        side: Side::Sell,
+                        size: 1,
+                        order_type: OrderType::Limit(10_000),
+                    })
+                    .unwrap();
+                }
+
+                ob
+            },
+            |mut ob| {
+                black_box(
+                    ob.accept_order(OrderTicket {
+                        side: Side::Buy,
+                        size: 20_000,
+                        order_type: OrderType::Market,
+                    })
+                    .unwrap(),
+                );
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+fn bench_large_steady_state(c: &mut Criterion) {
+    c.bench_function("steady_state_200_levels_100k_events", |b| {
+        b.iter_batched(
+            || {
+                let mut ob = Orderbook::new();
+                seed_book(&mut ob, 200, 100);
+                ob
+            },
+            |mut ob| {
+                for i in 0..100_000 {
+                    let ticket = if i % 7 == 0 {
+                        OrderTicket {
+                            side: Side::Buy,
+                            size: 10,
+                            order_type: OrderType::Market,
+                        }
+                    } else {
+                        OrderTicket {
+                            side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
+                            size: 2,
+                            order_type: OrderType::Limit(10_000 + (i % 100) as i64),
+                        }
+                    };
+
+                    black_box(ob.accept_order(ticket).unwrap());
+                }
+            },
+            BatchSize::LargeInput,
+        )
     });
 }
 
 criterion_group!(
     benches,
-    // bench_limit_inserts,
-    bench_full_sweep,
-    // bench_realistic_flow,
-    // bench_fifo_pressure,
-    // bench_deep_ladder,
-    // bench_million_mixed
+    bench_market_sweeps,
+    bench_heavy_limit_insert,
+    bench_mixed_hft_flow,
+    bench_fifo_queue_depth,
+    bench_large_steady_state
 );
-
 criterion_main!(benches);

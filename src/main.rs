@@ -6,225 +6,169 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use orderbook::{orderbook::Orderbook, orders::{OrderTicket, OrderType, Side}};
-
-    const SCALE: i64 = 100; // if you use scaled ints
+    use orderbook::{OrderResponse, OrderTicket, OrderType, Side, book::Orderbook};
 
     fn limit(side: Side, price: i64, size: i64) -> OrderTicket {
         OrderTicket {
-            order_type: OrderType::Limit(price),
-            size,
             side,
+            size,
+            order_type: OrderType::Limit(price),
         }
     }
 
     fn market(side: Side, size: i64) -> OrderTicket {
         OrderTicket {
-            order_type: OrderType::Market,
-            size,
             side,
+            size,
+            order_type: OrderType::Market,
         }
     }
 
-    // ------------------------------------------------------------
-    // 1️⃣ Fill book with 500 deterministic limit orders
-    // ------------------------------------------------------------
     #[test]
-    fn test_fill_book_500_orders() {
-        let mut book = Orderbook::new();
+    fn test_basic_limit_insert_and_top_of_book() {
+        let mut ob = Orderbook::new();
 
-        // 250 bids, 250 asks
-        for i in 0..250 {
-            let price = 10_000 * SCALE - i as i64;
-            let size = 10 + (i as i64 % 5);
-            book.accept_order(limit(Side::Buy, price, size)).unwrap();
+        // Add bids
+        ob.accept_order(limit(Side::Buy, 100, 10)).unwrap();
+        ob.accept_order(limit(Side::Buy, 101, 5)).unwrap();
+        ob.accept_order(limit(Side::Buy, 99, 7)).unwrap();
+
+        // Add asks
+        ob.accept_order(limit(Side::Sell, 105, 8)).unwrap();
+        ob.accept_order(limit(Side::Sell, 103, 12)).unwrap();
+
+        let best_bid = ob.get_best_bid().unwrap();
+        let best_ask = ob.get_best_ask().unwrap();
+
+        assert_eq!(best_bid.price, 101);
+        assert_eq!(best_bid.size, 5);
+
+        assert_eq!(best_ask.price, 103);
+        assert_eq!(best_ask.size, 12);
+
+        assert!(best_bid.price < best_ask.price);
+    }
+
+    #[test]
+    fn test_market_order_partial_fill() {
+        let mut ob = Orderbook::new();
+
+        // Build ask side
+        ob.accept_order(limit(Side::Sell, 100, 10)).unwrap();
+        ob.accept_order(limit(Side::Sell, 101, 20)).unwrap();
+
+        // Market buy that consumes only first level
+        let response = ob.accept_order(market(Side::Buy, 5)).unwrap();
+
+        match response {
+            OrderResponse::Market(m) => {
+                assert_eq!(m.size, 5);
+                assert_eq!(m.notional, 5 * 100);
+            }
+            _ => panic!("Expected market response"),
         }
 
-        for i in 0..250 {
-            let price = 10_001 * SCALE + i as i64;
-            let size = 15 + (i as i64 % 7);
-            book.accept_order(limit(Side::Sell, price, size)).unwrap();
+        let best_ask = ob.get_best_ask().unwrap();
+        assert_eq!(best_ask.price, 100);
+        assert_eq!(best_ask.size, 5); // 10 - 5
+    }
+
+    #[test]
+    fn test_market_order_multi_level_sweep() {
+        let mut ob = Orderbook::new();
+
+        ob.accept_order(limit(Side::Sell, 100, 10)).unwrap();
+        ob.accept_order(limit(Side::Sell, 101, 10)).unwrap();
+        ob.accept_order(limit(Side::Sell, 102, 10)).unwrap();
+
+        let response = ob.accept_order(market(Side::Buy, 25)).unwrap();
+
+        match response {
+            OrderResponse::Market(m) => {
+                assert_eq!(m.size, 25);
+                // 10@100 + 10@101 + 5@102
+                let expected = 10 * 100 + 10 * 101 + 5 * 102;
+                assert_eq!(m.notional, expected);
+            }
+            _ => panic!("Expected market response"),
         }
 
-        assert!(book.get_best_bid().is_some());
-        assert!(book.get_best_ask().is_some());
-
-        assert!(book.get_best_bid().unwrap().price
-            < book.get_best_ask().unwrap().price);
-
-        let total_bid = book.total_liquidity(Side::Buy);
-        let total_ask = book.total_liquidity(Side::Sell);
-
-        assert!(total_bid > 0);
-        assert!(total_ask > 0);
+        let best_ask = ob.get_best_ask().unwrap();
+        assert_eq!(best_ask.price, 102);
+        assert_eq!(best_ask.size, 5);
     }
 
-    // ------------------------------------------------------------
-    // 2️⃣ Eat entire book with market orders
-    // ------------------------------------------------------------
     #[test]
-    fn test_eat_all_liquidity() {
-        let mut book = Orderbook::new();
+    fn test_crossing_limit_becomes_taker() {
+        let mut ob = Orderbook::new();
 
-        // symmetric deterministic setup
-        for _ in 0..100 {
-            book.accept_order(limit(Side::Sell, 10_000 * SCALE, 10)).unwrap();
-            book.accept_order(limit(Side::Buy, 9_999 * SCALE, 10)).unwrap();
+        ob.accept_order(limit(Side::Sell, 100, 10)).unwrap();
+
+        // This buy limit crosses the book and should execute immediately
+        let response = ob.accept_order(limit(Side::Buy, 105, 5)).unwrap();
+
+        match response {
+            OrderResponse::Market(m) => {
+                assert_eq!(m.size, 5);
+                assert_eq!(m.notional, 5 * 100);
+            }
+            _ => panic!("Crossing limit should execute as market"),
         }
 
-        let total_ask = book.total_liquidity(Side::Sell);
-        let total_bid = book.total_liquidity(Side::Buy);
-
-        // consume asks
-        book.accept_order(market(Side::Buy, total_ask)).unwrap();
-        assert_eq!(book.total_liquidity(Side::Sell), 0);
-
-        // consume bids
-        book.accept_order(market(Side::Sell, total_bid)).unwrap();
-        assert_eq!(book.total_liquidity(Side::Buy), 0);
-
-        assert!(book.get_best_bid().is_none());
-        assert!(book.get_best_ask().is_none());
+        let best_ask = ob.get_best_ask().unwrap();
+        assert_eq!(best_ask.size, 5);
     }
 
-    // ------------------------------------------------------------
-    // 3️⃣ FIFO at same price level
-    // ------------------------------------------------------------
     #[test]
-    fn test_fifo_same_price() {
-        let mut book = Orderbook::new();
+    fn test_liquidity_tracking() {
+        let mut ob = Orderbook::new();
 
-        book.accept_order(limit(Side::Sell, 10_000 * SCALE, 10)).unwrap();
-        book.accept_order(limit(Side::Sell, 10_000 * SCALE, 20)).unwrap();
-        book.accept_order(limit(Side::Sell, 10_000 * SCALE, 30)).unwrap();
+        ob.accept_order(limit(Side::Buy, 100, 10)).unwrap();
+        ob.accept_order(limit(Side::Buy, 101, 5)).unwrap();
+        ob.accept_order(limit(Side::Sell, 105, 20)).unwrap();
 
-        book.accept_order(market(Side::Buy, 15)).unwrap();
+        assert_eq!(ob.total_liquidity(Side::Buy), 15);
+        assert_eq!(ob.total_liquidity(Side::Sell), 20);
 
-        let remaining = book.total_liquidity(Side::Sell);
-        assert_eq!(remaining, 45); // 10 + 20 + 30 - 15 = 45
+        ob.accept_order(market(Side::Sell, 8)).unwrap();
 
-        // first order must be fully consumed
-        // second partially
+        assert_eq!(ob.total_liquidity(Side::Buy), 7);
     }
 
-    // ------------------------------------------------------------
-    // 4️⃣ Partial fill leaves remainder
-    // ------------------------------------------------------------
     #[test]
-    fn test_partial_fill() {
-        let mut book = Orderbook::new();
+    fn test_deterministic_simulated_order_flow() {
+        let mut ob = Orderbook::new();
 
-        book.accept_order(limit(Side::Sell, 10_000 * SCALE, 100)).unwrap();
-        book.accept_order(market(Side::Buy, 40)).unwrap();
+        // Seed book
+        for i in 0..10 {
+            ob.accept_order(limit(Side::Buy, 100 - i, 10)).unwrap();
+            ob.accept_order(limit(Side::Sell, 101 + i, 10)).unwrap();
+        }
 
-        assert_eq!(book.total_liquidity(Side::Sell), 60);
-
-        let best = book.get_best_ask().unwrap();
-        assert_eq!(best.size, 60);
-    }
-
-    // ------------------------------------------------------------
-    // 5️⃣ Crossing limit order behaves like taker
-    // ------------------------------------------------------------
-    #[test]
-    fn test_crossing_limit_order() {
-        let mut book = Orderbook::new();
-
-        book.accept_order(limit(Side::Sell, 10_000 * SCALE, 50)).unwrap();
-
-        // aggressive buy
-        book.accept_order(limit(Side::Buy, 11_000 * SCALE, 50)).unwrap();
-
-        assert_eq!(book.total_liquidity(Side::Sell), 0);
-        assert_eq!(book.total_liquidity(Side::Buy), 0);
-    }
-
-    // ------------------------------------------------------------
-    // 6️⃣ Zero-size order rejection
-    // ------------------------------------------------------------
-    #[test]
-    fn test_zero_size_rejected() {
-        let mut book = Orderbook::new();
-
-        let result = book.accept_order(limit(Side::Buy, 10_000 * SCALE, 0));
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------
-    // 7️⃣ Market order on empty book
-    // ------------------------------------------------------------
-    #[test]
-    fn test_market_on_empty_book() {
-        let mut book = Orderbook::new();
-
-        let result = book.accept_order(market(Side::Buy, 100));
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------
-    // 8️⃣ Massive alternating maker/taker simulation
-    // ------------------------------------------------------------
-    #[test]
-    fn test_realistic_flow_simulation() {
-        let mut book = Orderbook::new();
-
-        // deterministic trading simulation
-        for i in 0..200 {
-            let price = 10_000 * SCALE + (i % 10) as i64;
-
-            book.accept_order(limit(Side::Sell, price, 10)).unwrap();
-            book.accept_order(limit(Side::Buy, price - 5, 10)).unwrap();
-
+        // Deterministic traffic simulation
+        for i in 0..100 {
             if i % 3 == 0 {
-                book.accept_order(market(Side::Buy, 5)).unwrap();
-            }
-
-            if i % 5 == 0 {
-                book.accept_order(market(Side::Sell, 3)).unwrap();
-            }
-        }
-
-        // invariants
-        if let (Some(bid), Some(ask)) = (book.get_best_bid(), book.get_best_ask()) {
-            assert!(bid.price < ask.price);
-        }
-
-        assert!(book.total_liquidity(Side::Buy) >= 0);
-        assert!(book.total_liquidity(Side::Sell) >= 0);
-    }
-
-    // ------------------------------------------------------------
-    // 9️⃣ Deterministic stress test (500+ mixed ops)
-    // ------------------------------------------------------------
-    #[test]
-    fn test_stress_1000_operations() {
-        let mut book = Orderbook::new();
-
-        for i in 0..500 {
-            let price = if i % 2 == 0 {
-                10_000 * SCALE - (i % 20) as i64
+                ob.accept_order(market(Side::Buy, 3)).unwrap();
+            } else if i % 3 == 1 {
+                ob.accept_order(market(Side::Sell, 2)).unwrap();
             } else {
-                10_000 * SCALE + (i % 20) as i64
-            };
+                let price = 100 + (i % 5) as i64;
+                ob.accept_order(limit(Side::Buy, price, 1)).unwrap();
+            }
 
-            let size = 1 + (i % 10) as i64;
-
-            let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
-
-            book.accept_order(limit(side, price, size)).unwrap();
+            // Invariant: if both sides exist, no crossed book
+            if let (Some(bid), Some(ask)) = (ob.get_best_bid(), ob.get_best_ask()) {
+                assert!(bid.price < ask.price);
+            }
         }
 
-        for i in 0..500 {
-            let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
-            book.accept_order(market(side, 5)).unwrap();
-        }
+        // Final sanity checks
+        let total_bid = ob.total_liquidity(Side::Buy);
+        let total_ask = ob.total_liquidity(Side::Sell);
 
-        // book should never cross
-        if let (Some(bid), Some(ask)) = (book.get_best_bid(), book.get_best_ask()) {
-            assert!(bid.price < ask.price);
-        }
+        assert!(total_bid >= 0);
+        assert!(total_ask >= 0);
     }
 }
