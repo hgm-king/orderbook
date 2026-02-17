@@ -38,10 +38,15 @@ In order to replay any set of orders, just provide the orders as a list and ente
 
 ## Simplifications/Extensions
 ### Decimals
-I did not want to use any decimals because they are imperfect on computers and rust_decimal is ideal for this but too heavy for the number crunching. I would ideally use it for serializing and deserializing the data over the network. For this I scaled up the decimals to a full integer to save work on the cpu.
+I did not want to use any decimals because they are imperfect on computers and rust_decimal is ideal for this but too heavy for the number crunching. I would ideally use it for serializing and deserializing the data over the network. For this I scaled up the decimals to a full integer to give me lovely indexes that I can use as pointers
 
 ### Events
 I added comments where I would put events that need to be emitted to get the RECEIVED, FILLED, CANCELLED execution reports. I would ideally have some sort of channel that the book would send on without blocking and async system or thread would manage the nitty gritty there of mapping it back to subscribed users.
 
 ### ClientIds
 I dont have the users provide client order id's but I would definitely want to handle that with a map of sorts.
+
+### Further Optimizations
+I would probably go on to remove the safe `.get` functions that I use to access the arrays. I did them originally becase I was preparing to have a battle with debugging and wanted to handle the case cleanly with errors. Once the logic is battle tested and has a more thorough test suite it would be safer to take those out.
+
+I would probably also go deeper on my top of book calculations and my free_list push/pop and consider maybe bitmaps so that I can avoid scanning the arrays. I could also go very deep on the branching and inlining, so that can cut down on as many assembler instructions as possible.
