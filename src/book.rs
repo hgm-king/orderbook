@@ -1,6 +1,6 @@
 use crate::{
-    LimitOrderResponse, MarketOrderResponse, OrderResponse, OrderTicket, OrderType,
-    PriceSize, Result, Side, half::HalfBook,
+    LimitOrderResponse, MarketOrderResponse, OrderResponse, OrderTicket, OrderType, PriceSize,
+    Result, Side, half::HalfBook,
 };
 
 const MIN_PRICE: i64 = 1;

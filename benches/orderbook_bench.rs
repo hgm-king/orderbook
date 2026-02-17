@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BatchSize};
-use orderbook::{book::Orderbook, OrderTicket, OrderType, Side};
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use orderbook::{OrderTicket, OrderType, Side, book::Orderbook};
 
 const BASE_PRICE: i64 = 10_000;
 
@@ -67,13 +67,11 @@ fn bench_one_million_events(c: &mut Criterion) {
                         OrderTicket {
                             side: if i % 2 == 0 { Side::Buy } else { Side::Sell },
                             size: 5,
-                            order_type: OrderType::Limit(
-                                if i % 2 == 0 {
-                                    BASE_PRICE - offset
-                                } else {
-                                    BASE_PRICE + offset + 1
-                                }
-                            ),
+                            order_type: OrderType::Limit(if i % 2 == 0 {
+                                BASE_PRICE - offset
+                            } else {
+                                BASE_PRICE + offset + 1
+                            }),
                         }
                     };
 
@@ -86,7 +84,6 @@ fn bench_one_million_events(c: &mut Criterion) {
         )
     });
 }
-
 
 fn bench_market_sweeps(c: &mut Criterion) {
     c.bench_function("market_full_book_sweep_100_levels", |b| {
@@ -235,10 +232,10 @@ fn bench_large_steady_state(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_one_million_events,
-    // bench_market_sweeps,
-    // bench_heavy_limit_insert,
-    // bench_mixed_hft_flow,
-    // bench_fifo_queue_depth,
-    // bench_large_steady_state
+    bench_market_sweeps,
+    bench_heavy_limit_insert,
+    bench_mixed_hft_flow,
+    bench_fifo_queue_depth,
+    bench_large_steady_state
 );
 criterion_main!(benches);

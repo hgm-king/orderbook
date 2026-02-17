@@ -1,7 +1,6 @@
 use orderbook::Result;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     println!("Hello, world!");
 
     Ok(())

@@ -85,6 +85,8 @@ impl HalfBook {
         // Insert into HashMap.
         self.ids.insert(id, arena_index);
 
+        // self.emit(order.id, RECEIVED)
+
         if matches!(self.side, Side::Buy) {
             match self.top_of_book {
                 None => {
@@ -159,6 +161,8 @@ impl HalfBook {
 
         // Mark arena slot reusable.
         self.free_list.push(arena_index);
+
+        // self.emit(order.id, CANCELLED)
 
         Ok(())
     }
@@ -253,7 +257,9 @@ impl HalfBook {
                     self.remove_head_of_price_level(tob)?;
                     self.ids.remove(&id);
                     self.free_list.push(order_index);
+                    // self.emit(order.id, FILLED)
                 }
+                // else self.emit(order.id, PARTIAL_FILL)
             }
 
             // Fresh borrow again
