@@ -19,7 +19,7 @@ one_million_event_simulation
 I decided on Rust as my language because it is fast enough to be realistically competative in performance and I would have less of a headache in solving bugs. I would've gone on to use the excellent Tokio suite of async tools but this project stayted within the scope.
 
 ### First Attempt
-I originally wrote up a very simple design which held the bids and asks in a `Vec<Order>` where the top of book would be at the end. This was good because most action was at the top of book, and editing the array only had to shift a few orders at the rear of the array. I was getting 100k orders a second. I ran it through the AI and it told me rather rudely that was not acceptable for an order.
+I originally wrote up a very simple design which held the bids and asks in a `Vec<Order>` where the top of book would be at the end. This was good because most action was at the top of book, and editing the array only had to shift a few orders at the rear of the array. I was getting 100k orders a second. I ran it through the AI and it told me rather rudely that was not acceptable for an order. Also I got my tests and the benchmarks from Mr. Chatgpt
 
 ### Second Attempt
 So I asked what data structures it recommended and it pointed me to a Price Ladder with an Arena. I coded this up based on its pseudocode for inserting, matching, modifying, and replacing orders. This proved to be a really effective set of data structures for this problem space.
