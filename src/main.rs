@@ -6,6 +6,7 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use orderbook::{OrderResponse, OrderTicket, OrderType, Side, book::Orderbook};

@@ -15,7 +15,7 @@ pub enum OrderType {
     Limit(i64),
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Side {
     Buy,
     Sell,
